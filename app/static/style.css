@@ -1,0 +1,91 @@
+body {
+    font-family: Arial, sans-serif;
+    background: #0f172a;
+    background-image: url("/static/images/bg1.png");
+    color: #f1f5f9;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+}
+
+.container {
+    background: #1e293b;
+    padding: 2rem;
+    border-radius: 12px;
+    text-align: center;
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    width: 350px;
+}
+
+h1 {
+    margin-bottom: 0.5rem;
+}
+
+p {
+    margin-bottom: 1.5rem;
+    color: #94a3b8;
+}
+
+input[type="file"] {
+    margin-bottom: 1rem;
+    margin-left: 25%;
+    width: 100%;
+}
+
+button {
+    background: #3b82f6;
+    border: none;
+    padding: 10px;
+    color: white;
+    border-radius: 6px;
+    cursor: pointer;
+    width: 100%;
+    font-weight: bold;
+}
+
+button:hover {
+    background: #2563eb;
+}
+
+a {
+    text-decoration: none;
+}
+
+.logo {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.logoimg{
+    width: 5rem;
+}
+
+.download {
+    background-color: #354b6d;
+    border: none;
+    color: #209ec5;
+    padding: 12px 30px;
+    border-radius: 10px;
+    margin-bottom: 30px;
+    cursor: pointer;
+    font-size: 20px;
+}
+
+.download:hover {
+  background-color: rgb(81, 110, 197);
+}
+
+.upload {
+    background-color: #354b6d;
+    border: none;
+    color: #209ec5;
+    padding: 12px 30px;
+    border-radius: 10px;
+    margin-top: 10px;
+    cursor: pointer;
+    font-size: 20px;
+    width: 100%;
+}

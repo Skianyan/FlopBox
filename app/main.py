@@ -1,12 +1,17 @@
+## Para manejo de archivos local, despliegue de la pagina
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
+from fastapi import Depends
+from fastapi.staticfiles import StaticFiles
+
+## manejo de la base de datos postgresql
 from app.database import Base, engine
 from app.models.file import File as FileModel
 from app.database import SessionLocal
 from sqlalchemy.orm import Session
-from fastapi import Depends
-from datetime import datetime
+
+import asyncio
 import secrets
 from datetime import datetime, timedelta
 
@@ -15,7 +20,7 @@ import uuid
 import pathlib
 import secrets
 
-# crear bd
+# manejo de bd.
 Base.metadata.create_all(bind=engine)
 
 def get_db():
@@ -25,8 +30,46 @@ def get_db():
     finally:
         db.close()
 
+## limpieza de archivos expirados
+
+async def cleanup_expired_files():
+    while True:
+        print("Revisando archivos expirados...")
+
+        db = SessionLocal()
+
+        try:
+            expired_files = db.query(FileModel).filter(
+                FileModel.expires_at < datetime.utcnow()
+            ).all()
+
+            for file in expired_files:
+                # Eliminar archivo físico
+                if os.path.exists(file.filepath):
+                    os.remove(file.filepath)
+                    print(f"Eliminado archivo: {file.filepath}")
+
+                # Eliminar de DB
+                db.delete(file)
+
+            db.commit()
+
+        except Exception as e:
+            print("Error en cleanup:", e)
+
+        finally:
+            db.close()
+
+        # Esperar 60 segundos
+        await asyncio.sleep(60)
+
+
+## desplegar pagina
 app = FastAPI()
 templates = Jinja2Templates(directory="app/templates")
+
+# montar archivos estaticos
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -36,6 +79,13 @@ FILE_STORE = {}
 # Configuración de seguridad
 ALLOWED_TYPES = ["image/png", "image/jpeg", "image/gif", "application/pdf"]
 MAX_SIZE = 5 * 1024 * 1024  # 5MB
+
+# 
+@app.on_event("startup")
+async def start_cleanup_task():
+    asyncio.create_task(cleanup_expired_files())
+
+#### ENDPOINTS ####
 
 ## HOME 
 @app.get("/", response_class=HTMLResponse)
@@ -90,8 +140,22 @@ async def upload_file(
     db.refresh(db_file)
 
     return HTMLResponse(f"""
-        <h2>Archivo subido</h2>
-        <a href="/download/{token}">Descargar archivo</a>
+        <html>
+        <head>
+        <link rel="stylesheet" href="/static/style.css">
+        </head>
+        <body>
+            <div class="container">
+                <h2>Archivo subido de manera exitosa</h2>
+                <p>Tu enlace de descarga:</p>
+                <a class="download" href="/download/{token}" target="_blank">
+                    Descargar
+                </a>
+                <br><br>
+                <a class="download" href="/">⬅ Volver</a>
+            </div>
+        </body>
+        </html>
     """)
 
 ## DOWNLOAD FILE ENDPOINT
