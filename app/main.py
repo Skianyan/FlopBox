@@ -11,6 +11,9 @@ from app.models.file import File as FileModel
 from app.database import SessionLocal
 from sqlalchemy.orm import Session
 
+## funcion de log
+from app.services.logs import log_action
+
 import asyncio
 import secrets
 from datetime import datetime, timedelta
@@ -58,6 +61,7 @@ async def cleanup_expired_files():
             print("Error en cleanup:", e)
 
         finally:
+            log_action("delete", file.filename, file.token, request=None)
             db.close()
 
         # Esperar 60 segundos
@@ -99,6 +103,7 @@ async def home(request: Request):
 ## UPLOAD FILE ENDPOINT
 @app.post("/upload")
 async def upload_file(
+    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
@@ -135,6 +140,9 @@ async def upload_file(
         expires_at=datetime.utcnow() + timedelta(hours=24)
     )
 
+    # Guardar Log
+    log_action("upload", safe_name, token, request)
+
     db.add(db_file)
     db.commit()
     db.refresh(db_file)
@@ -151,7 +159,7 @@ async def upload_file(
                 <a class="download" href="/download/{token}" target="_blank">
                     Descargar
                 </a>
-                <br><br>
+                <br><br><br>
                 <a class="download" href="/">⬅ Volver</a>
             </div>
         </body>
@@ -160,7 +168,10 @@ async def upload_file(
 
 ## DOWNLOAD FILE ENDPOINT
 @app.get("/download/{token}")
-async def download_file(token: str, db: Session = Depends(get_db)):
+async def download_file(
+    request: Request,
+    token: str, 
+    db: Session = Depends(get_db)):
 
     db_file = db.query(FileModel).filter(FileModel.token == token).first()
 
@@ -173,6 +184,9 @@ async def download_file(token: str, db: Session = Depends(get_db)):
 
     if not os.path.exists(db_file.filepath):
         raise HTTPException(404, "Archivo no disponible")
+
+    ## Mandar Log
+    log_action("download", db_file.filename, token, request)
 
     return FileResponse(
         path=db_file.filepath,
