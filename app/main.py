@@ -80,7 +80,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # Configuración de seguridad
 ALLOWED_TYPES = ["image/png", "image/jpeg", "image/gif", "application/pdf"]
-MAX_SIZE = 5 * 1024 * 1024  # 5MB
+MAX_SIZE = 20 * 1024 * 1024  # 20MB
 
 # 
 @app.on_event("startup")
@@ -94,9 +94,10 @@ def upload_to_supabase(file_bytes: bytes, filename: str):
             file=file_bytes,
             file_options={"content-type": "application/octet-stream"}
         )
+        print("Supabase response:", response) 
         return response
     except Exception as e:
-        print("Error subiendo a Supabase:", e)
+        print("Error", repr(e))  
         return None
 
 #### ENDPOINTS ####
@@ -187,8 +188,12 @@ async def download_file(
 
     # Log
     log_action("download", db_file.filename, token, request)
+    # test
+    print("PATH GUARDADO:", repr(db_file.filepath))
+    # 🔐 Generar URL firmada (expira en 60 segundos)
+    signed_url = supabase.storage.from_("files").create_signed_url(
+        path=db_file.filepath,
+        expires_in=60
+    )
 
-    # URL pública
-    url = supabase.storage.from_("files").get_public_url(db_file.filepath)
-
-    return RedirectResponse(url)
+    return RedirectResponse(signed_url["signedURL"])
