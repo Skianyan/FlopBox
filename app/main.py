@@ -1,6 +1,6 @@
 ## Para manejo de archivos local, despliegue de la pagina
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi import Depends
 from fastapi.staticfiles import StaticFiles
@@ -10,6 +10,9 @@ from app.database import Base, engine
 from app.models.file import File as FileModel
 from app.database import SessionLocal
 from sqlalchemy.orm import Session
+
+## for uploading
+from app.supabase_client import supabase
 
 ## funcion de log
 from app.services.logs import log_action
@@ -38,7 +41,6 @@ def get_db():
 async def cleanup_expired_files():
     while True:
         print("Revisando archivos expirados...")
-
         db = SessionLocal()
 
         try:
@@ -47,12 +49,10 @@ async def cleanup_expired_files():
             ).all()
 
             for file in expired_files:
-                # Eliminar archivo físico
-                if os.path.exists(file.filepath):
-                    os.remove(file.filepath)
-                    print(f"Eliminado archivo: {file.filepath}")
+                supabase.storage.from_("files").remove([file.filepath])
+                # log
+                log_action("delete", file.filename, file.token, request=None)
 
-                # Eliminar de DB
                 db.delete(file)
 
             db.commit()
@@ -61,10 +61,8 @@ async def cleanup_expired_files():
             print("Error en cleanup:", e)
 
         finally:
-            log_action("delete", file.filename, file.token, request=None)
             db.close()
 
-        # Esperar 60 segundos
         await asyncio.sleep(60)
 
 
@@ -75,10 +73,10 @@ templates = Jinja2Templates(directory="app/templates")
 # montar archivos estaticos
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-FILE_STORE = {}
+# para archivos locales 
+#UPLOAD_DIR = "uploads"
+#os.makedirs(UPLOAD_DIR, exist_ok=True)
+#FILE_STORE = {}
 
 # Configuración de seguridad
 ALLOWED_TYPES = ["image/png", "image/jpeg", "image/gif", "application/pdf"]
@@ -88,6 +86,18 @@ MAX_SIZE = 5 * 1024 * 1024  # 5MB
 @app.on_event("startup")
 async def start_cleanup_task():
     asyncio.create_task(cleanup_expired_files())
+
+def upload_to_supabase(file_bytes: bytes, filename: str):
+    try:
+        response = supabase.storage.from_("files").upload(
+            path=filename,
+            file=file_bytes,
+            file_options={"content-type": "application/octet-stream"}
+        )
+        return response
+    except Exception as e:
+        print("Error subiendo a Supabase:", e)
+        return None
 
 #### ENDPOINTS ####
 
@@ -100,6 +110,7 @@ async def home(request: Request):
         context={}
     )
 
+
 ## UPLOAD FILE ENDPOINT
 @app.post("/upload")
 async def upload_file(
@@ -111,23 +122,21 @@ async def upload_file(
     if file.content_type not in ALLOWED_TYPES:
         raise HTTPException(400, "Tipo no permitido")
 
+    # Leer archivo completo
+    contents = await file.read()
+
+    if len(contents) > MAX_SIZE:
+        raise HTTPException(400, "Archivo demasiado grande")
+
     # Nombre seguro
     safe_name = pathlib.Path(file.filename).name
     unique_name = f"{uuid.uuid4()}_{safe_name}"
-    file_path = os.path.join(UPLOAD_DIR, unique_name)
 
-    # Guardar archivo (streaming)
-    size = 0
-    chunk_size = 1024 * 1024
+    # Subir a Supabase
+    response = upload_to_supabase(contents, unique_name)
 
-    with open(file_path, "wb") as buffer:
-        while chunk := await file.read(chunk_size):
-            size += len(chunk)
-            if size > MAX_SIZE:
-                buffer.close()
-                os.remove(file_path)
-                raise HTTPException(400, "Archivo demasiado grande")
-            buffer.write(chunk)
+    if not response:
+        raise HTTPException(500, "Error subiendo archivo")
 
     # Generar token
     token = secrets.token_urlsafe(16)
@@ -135,61 +144,51 @@ async def upload_file(
     # Guardar en DB
     db_file = FileModel(
         filename=safe_name,
-        filepath=file_path,
+        filepath=unique_name,
         token=token,
         expires_at=datetime.utcnow() + timedelta(hours=24)
     )
-
-    # Guardar Log
-    log_action("upload", safe_name, token, request)
 
     db.add(db_file)
     db.commit()
     db.refresh(db_file)
 
+    # Log
+    log_action("upload", safe_name, token, request)
+
     return HTMLResponse(f"""
-        <html>
-        <head>
-        <link rel="stylesheet" href="/static/style.css">
-        </head>
-        <body>
-            <div class="container">
-                <h2>Archivo subido de manera exitosa</h2>
-                <p>Tu enlace de descarga:</p>
-                <a class="download" href="/download/{token}" target="_blank">
-                    Descargar
-                </a>
-                <br><br><br>
-                <a class="download" href="/">⬅ Volver</a>
-            </div>
-        </body>
-        </html>
+    <html>
+    <head><link rel="stylesheet" href="/static/style.css"></head>
+    <body>
+        <div class="container">
+            <h2>Archivo subido</h2>
+            <a href="/download/{token}">Descargar</a>
+            <br><br>
+            <a href="/">Volver</a>
+        </div>
+    </body>
+    </html>
     """)
 
 ## DOWNLOAD FILE ENDPOINT
 @app.get("/download/{token}")
 async def download_file(
     request: Request,
-    token: str, 
-    db: Session = Depends(get_db)):
-
+    token: str,
+    db: Session = Depends(get_db)
+):
     db_file = db.query(FileModel).filter(FileModel.token == token).first()
 
     if not db_file:
         raise HTTPException(404, "Archivo no encontrado")
 
-    # Validar expiración
     if db_file.expires_at < datetime.utcnow():
         raise HTTPException(410, "Archivo expirado")
 
-    if not os.path.exists(db_file.filepath):
-        raise HTTPException(404, "Archivo no disponible")
-
-    ## Mandar Log
+    # Log
     log_action("download", db_file.filename, token, request)
 
-    return FileResponse(
-        path=db_file.filepath,
-        filename=db_file.filename,
-        media_type="application/octet-stream"
-    )
+    # URL pública
+    url = supabase.storage.from_("files").get_public_url(db_file.filepath)
+
+    return RedirectResponse(url)
