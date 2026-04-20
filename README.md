@@ -22,4 +22,4 @@ pip install -r requirements.txt <br>
 
 - Correr el proyecto <br>
 
-uvicorn app.main:app --reload <br>
+uvicorn app.main:app --reload
